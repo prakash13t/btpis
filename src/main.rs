@@ -1,55 +1,73 @@
 mod adapters;
+mod auth;
+mod commands;
+mod config;
+mod utils;
 
-use adapters::{AdapterDirection,fetch_iflow_adapters};
+use adapters::{AdapterDirection, fetch_iflow_adapters};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use auth::get_token;
 use clap::{Parser, Subcommand};
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use serde::{Deserialize, Serialize};
+use commands::get::GetCommands;
+use config::{config_path, load_config, resolve_profile, OauthConfig};
+use reqwest::header::{ACCEPT, AUTHORIZATION};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-// use tabled::{settings::{Width, Modify}, settings::object::Columns};
-use indexmap::IndexMap;
 use tabled::settings::object::Rows;
 use tabled::settings::{Color, Style};
 use tabled::{Table, Tabled};
+
+use crate::utils::summarise_adapters;
 
 #[derive(Debug, Parser)]
 #[command(name = "btpis")]
 #[command(about = "BTPIS CLI for OAuth config and package listing")]
 struct Cli {
+    /// Profile to use. Can also be set via BTPIS_PROFILE env var.
+    #[arg(long, env = "BTPIS_PROFILE", global = true)]
+    profile: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Configure the CLI with OAuth credentials
+    /// Manage OAuth profiles
     Config {
         #[command(subcommand)]
         action: ConfigCommands,
     },
     /// List packages using the saved OAuth configuration
     List {
-        /// What to list
         #[command(subcommand)]
         target: ListCommands,
+    },
+    /// Get details of a single integration flow
+    Get {
+        #[command(subcommand)]
+        target: GetCommands,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommands {
-    /// Save OAuth credentials from a JSON file to the local config file
+    /// Save OAuth credentials as a new profile from a JSON file
     Set {
+        /// Profile name (e.g. dev, qa, prd)
+        profile: String,
         /// Path to the JSON file containing the OAuth config
         file: PathBuf,
     },
-}
-#[derive(Debug, Clone, PartialEq, clap::ValueEnum)]
-enum IncludeOption {
-    Adapters,
-    Endpoints,
+    /// List all configured profiles
+    List,
+    /// Set the default profile
+    SetDefault {
+        /// Profile name to set as default
+        profile: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -62,33 +80,9 @@ enum ListCommands {
         #[arg(long, help = "Fetch iflows from all packages")]
         all: bool,
     },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ConfigFile {
-    oauth: OauthConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct OauthConfig {
-    createdate: String,
-    clientid: String,
-    clientsecret: String,
-    tokenurl: String,
-    url: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    expires_in: i64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct CachedToken {
-    access_token: String,
-    expires_at: i64,
+    /// List service endpoints
+    #[command(name = "service-endpoints")]
+    Serviceendpoints,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,14 +103,6 @@ struct PackageRecord {
     name: String,
     #[serde(rename = "Vendor")]
     vendor: String,
-    #[serde(rename = "ModifiedBy")]
-    modified_by: String,
-    #[serde(rename = "CreationDate")]
-    creation_date: String,
-    #[serde(rename = "CreatedBy")]
-    created_by: String,
-    #[serde(rename = "ModifiedDate")]
-    modified_date: String,
     #[serde(rename = "Mode", default)]
     mode: String,
 }
@@ -132,6 +118,7 @@ struct IflowData {
     #[serde(default)]
     results: Vec<IflowRecord>,
 }
+
 #[derive(Debug, Deserialize)]
 struct IflowRecord {
     #[serde(default, rename = "Id")]
@@ -144,35 +131,16 @@ struct IflowRecord {
     sender: Option<String>,
     #[serde(default, rename = "Receiver")]
     receiver: Option<String>,
-    // #[serde(default, rename = "CreatedAt")]
-    // creation_at: Option<String>,
-    // #[serde(default, rename = "CreatedBy")]
-    // created_by: Option<String>,
-    // #[serde(default, rename = "ModifiedAt")]
-    // modified_at: Option<String>,
-    // #[serde(default, rename = "ModifiedBy")]
-    // modified_by: Option<String>,
 }
 
 #[derive(Debug, Tabled)]
 struct PackageRow {
-    // #[tabled(skip)]
-    // #[tabled(rename = "Id")]
-    // id: String,
     #[tabled(rename = "Name")]
     name: String,
     #[tabled(rename = "Vendor")]
     vendor: String,
     #[tabled(rename = "Mode")]
     mode: String,
-    #[tabled(rename = "Modified By")]
-    modified_by: String,
-    #[tabled(rename = "Creation Date")]
-    creation_date: String,
-    #[tabled(rename = "Created By")]
-    created_by: String,
-    #[tabled(rename = "Modified Date")]
-    modified_date: String,
 }
 
 #[derive(Tabled)]
@@ -196,58 +164,86 @@ struct IflowDisplayRow {
     receiver_adapter: String,
 }
 
+#[derive(Tabled)]
+struct ServiceEndpointRow {
+    #[tabled(rename = "Iflow Name")]
+    name: String,
+    #[tabled(rename = "Version")]
+    version: String,
+    #[tabled(rename = "Protocol")]
+    protocol: String,
+    #[tabled(rename = "Url")]
+    url: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Config { action } => match action {
-            ConfigCommands::Set { file } => set_config(file).await?,
+            ConfigCommands::Set { profile, file } => set_config_profile(&profile, file).await?,
+            ConfigCommands::List => list_profiles()?,
+            ConfigCommands::SetDefault { profile } => set_default_profile(&profile)?,
         },
-        Commands::List { target } => match target {
-            ListCommands::Packages => list_packages().await?,
-            ListCommands::Iflows { package_id, all } => {
-                list_integration_flows(package_id, all).await?
+        Commands::List { target } => {
+            let config = load_config()?;
+            let profile = resolve_profile(cli.profile.as_deref(), &config);
+            match target {
+                ListCommands::Packages => list_packages(&config, &profile).await?,
+                ListCommands::Iflows { package_id, all } => {
+                    list_integration_flows(&config, &profile, package_id, all).await?
+                }
+                ListCommands::Serviceendpoints => {
+                    list_serviceendpoints(&config, &profile).await?
+                }
             }
-        },
+        }
+        Commands::Get { target } => {
+            let config = load_config()?;
+            let profile = resolve_profile(cli.profile.as_deref(), &config);
+            commands::get::handle(target, &config, &profile).await?;
+        }
     }
 
     Ok(())
 }
 
-fn summarise_adapters(types: Vec<&str>) -> String {
-    let mut counts: IndexMap<&str, usize> = IndexMap::new();
-    for t in types {
-        *counts.entry(t).or_insert(0) += 1;
-    }
-    counts
-        .iter()
-        .map(|(t, n)| {
-            if *n > 1 {
-                format!("{} {}", n, t)
-            } else {
-                t.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+#[derive(Deserialize)]
+struct OauthFile {
+    oauth: OauthConfig,
 }
 
-async fn set_config(file: PathBuf) -> Result<()> {
+async fn set_config_profile(profile: &str, file: PathBuf) -> Result<()> {
     let content = fs::read_to_string(&file)
         .with_context(|| format!("failed to read config file: {}", file.display()))?;
-    let config: ConfigFile =
-        serde_json::from_str(&content).context("invalid JSON config format")?;
+    let oauth: OauthConfig = serde_json::from_str(&content)
+        .or_else(|_| -> Result<OauthConfig> {
+            let wrapped: OauthFile =
+                serde_json::from_str(&content).context("invalid JSON config format")?;
+            Ok(wrapped.oauth)
+        })
+        .context("expected JSON with 'oauth' key at root, or a flat OAuth object")?;
 
-    if config.oauth.clientid.trim().is_empty()
-        || config.oauth.clientsecret.trim().is_empty()
-        || config.oauth.tokenurl.trim().is_empty()
-        || config.oauth.url.trim().is_empty()
+    if oauth.client_id.trim().is_empty()
+        || oauth.client_secret.trim().is_empty()
+        || oauth.token_url.trim().is_empty()
+        || oauth.url.trim().is_empty()
     {
         anyhow::bail!("config is missing required OAuth fields");
     }
 
     let path = config_path();
+    let mut config: config::ConfigFile = fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| config::ConfigFile {
+            default_profile: profile.to_string(),
+            profiles: HashMap::new(),
+        });
+
+    config.profiles.insert(profile.to_string(), oauth);
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create config directory: {}", parent.display()))?;
@@ -259,16 +255,60 @@ async fn set_config(file: PathBuf) -> Result<()> {
     )
     .with_context(|| format!("failed to write config file: {}", path.display()))?;
 
-    println!("Config saved to {}", path.display());
+    println!("Profile '{}' saved to {}", profile, path.display());
     Ok(())
 }
 
-async fn list_packages() -> Result<()> {
+fn list_profiles() -> Result<()> {
     let config = load_config()?;
-    let token = get_token(&config).await?;
+
+    println!("{} profile(s) configured:\n", config.profiles.len());
+    for (name, oauth) in &config.profiles {
+        let marker = if *name == config.default_profile {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("  {}{}", name, marker);
+        println!("    URL: {}", oauth.url);
+        println!("    Client ID: {}", oauth.client_id);
+        println!();
+    }
+    Ok(())
+}
+
+fn set_default_profile(profile: &str) -> Result<()> {
+    let path = config_path();
+    let mut config: config::ConfigFile = serde_json::from_str(
+        &fs::read_to_string(&path).context("config file not found")?,
+    )
+    .context("invalid config JSON")?;
+
+    if !config.profiles.contains_key(profile) {
+        anyhow::bail!(
+            "profile '{}' does not exist. Use 'btpis config set {} <file>' first.",
+            profile,
+            profile
+        );
+    }
+
+    config.default_profile = profile.to_string();
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&config).context("failed to serialize config")?,
+    )
+    .context("failed to write config")?;
+
+    println!("Default profile set to '{}'", profile);
+    Ok(())
+}
+
+async fn list_packages(config: &config::ConfigFile, profile: &str) -> Result<()> {
+    let token = get_token(config, profile).await?;
     let client = reqwest::Client::new();
 
-    let base_url = config.oauth.url.trim_end_matches('/');
+    let oauth = config.get_profile(profile)?;
+    let base_url = oauth.url.trim_end_matches('/');
     let package_url = format!("{}/api/v1/IntegrationPackages?$format=json", base_url);
 
     let response = client
@@ -293,33 +333,32 @@ async fn list_packages() -> Result<()> {
         .results
         .into_iter()
         .map(|item| PackageRow {
-            // id: item.id,
             name: item.name,
             vendor: item.vendor,
             mode: item.mode,
-            modified_by: item.modified_by,
-            creation_date: format_timestamp(&item.creation_date),
-            created_by: item.created_by,
-            modified_date: format_timestamp(&item.modified_date),
         })
         .collect::<Vec<_>>();
 
+    println!("[{}] {} package(s) found.", profile, rows.len());
     let mut table = Table::new(rows.iter());
     table.with(Style::rounded());
-    // table.with(Modify::new(Columns::first()).with(Width::wrap(10)));
     table.modify(Rows::first(), Color::FG_BRIGHT_GREEN);
-    // table.with(Width::wrap(Percent(75)));
-    // table.with(Width::wrap(15));
     println!("{table}");
 
     Ok(())
 }
 
-async fn list_integration_flows(package_id: Option<String>, all: bool) -> Result<()> {
-    let config = load_config()?;
-    let token = get_token(&config).await?;
+async fn list_integration_flows(
+    config: &config::ConfigFile,
+    profile: &str,
+    package_id: Option<String>,
+    all: bool,
+) -> Result<()> {
+    let token = get_token(config, profile).await?;
     let client = reqwest::Client::new();
-    let base_url = config.oauth.url.trim_end_matches('/');
+
+    let oauth = config.get_profile(profile)?;
+    let base_url = oauth.url.trim_end_matches('/');
 
     let url = format!("{}/api/v1/IntegrationPackages?$format=json", base_url);
     let response = client
@@ -387,7 +426,6 @@ async fn list_integration_flows(package_id: Option<String>, all: bool) -> Result
             .await
             .with_context(|| format!("failed to parse iflows for package: {}", pkg_id))?;
 
-        // READ_ONLY packages don't allow zip download
         let is_read_only = mode_map
             .get(pkg_id.as_str())
             .map(|m| m == "READ_ONLY")
@@ -397,7 +435,6 @@ async fn list_integration_flows(package_id: Option<String>, all: bool) -> Result
             let iflow_id = item.id.clone().unwrap_or_default();
             let version = item.version.clone().unwrap_or_default();
 
-            // 3. Fetch adapters — always, not behind a flag
             let (sender_adapter, receiver_adapter) = if is_read_only {
                 ("N/A".to_string(), "N/A".to_string())
             } else if iflow_id.is_empty() || version.is_empty() {
@@ -460,138 +497,103 @@ async fn list_integration_flows(package_id: Option<String>, all: bool) -> Result
         return Ok(());
     }
 
-    println!("{} integration flow(s) found.\n", display_rows.len());
+    println!("[{}] {} integration flow(s) found.", profile, display_rows.len());
 
     let mut table = Table::new(&display_rows);
     table.with(Style::rounded());
+    table.modify(Rows::first(), Color::FG_BRIGHT_GREEN);
     println!("{table}");
 
     Ok(())
 }
 
-async fn get_token(config: &ConfigFile) -> Result<String> {
-    if let Some(cached) = load_cached_token()? {
-        if cached.expires_at > now_unix() {
-            return Ok(cached.access_token);
-        }
-    }
-
+async fn list_serviceendpoints(config: &config::ConfigFile, profile: &str) -> Result<()> {
+    let token = get_token(config, profile).await?;
     let client = reqwest::Client::new();
+
+    let oauth = config.get_profile(profile)?;
+    let base_url = oauth.url.trim_end_matches('/');
+    let url = format!(
+        "{}/api/v1/ServiceEndpoints?$expand=EntryPoints",
+        base_url
+    );
+
     let response = client
-        .post(&config.oauth.tokenurl)
-        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(ACCEPT, "application/json")
-        .form(&[
-            ("grant_type", "client_credentials"),
-            ("client_id", &config.oauth.clientid),
-            ("client_secret", &config.oauth.clientsecret),
-        ])
+        .get(&url)
+        .header(ACCEPT, "application/xml")
+        .header(AUTHORIZATION, format!("Bearer {}", token))
         .send()
         .await
-        .context("failed to request OAuth token")?;
+        .context("failed to fetch service endpoints")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("token request failed with status: {}", response.status());
+        anyhow::bail!(
+            "service endpoints request failed with status: {}",
+            response.status()
+        );
     }
 
-    let token_response: TokenResponse = response
-        .json()
+    let text = response
+        .text()
         .await
-        .context("failed to parse OAuth token response")?;
-    if token_response.access_token.trim().is_empty() {
-        anyhow::bail!("token response did not include an access_token");
-    }
+        .context("failed to read service endpoints body")?;
 
-    let expires_at = now_unix() + token_response.expires_in.max(1);
-    let cached = CachedToken {
-        access_token: token_response.access_token.clone(),
-        expires_at,
-    };
+    let doc = roxmltree::Document::parse(&text).context("failed to parse service endpoints XML")?;
 
-    save_cached_token(&cached)?;
-    Ok(token_response.access_token)
-}
+    let rows: Vec<ServiceEndpointRow> = doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "entry")
+        .filter_map(|entry| {
+            let props = entry
+                .descendants()
+                .filter(|n| n.tag_name().name() == "properties")
+                .find(|props| {
+                    props
+                        .children()
+                        .any(|c| c.tag_name().name() == "Version")
+                })?;
 
-fn load_config() -> Result<ConfigFile> {
-    let path = config_path();
-    let content = fs::read_to_string(&path).with_context(|| {
-        format!(
-            "config file not found at {}. Run 'btpis config -f <file>' first.",
-            path.display()
-        )
-    })?;
-    let config: ConfigFile = serde_json::from_str(&content).context("invalid config JSON")?;
-    Ok(config)
-}
+            let get = |name: &str| -> String {
+                props
+                    .children()
+                    .find(|n| n.tag_name().name() == name)
+                    .and_then(|n| n.text())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            };
 
-fn config_path() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("btpis_cli");
-    path.push("config.json");
-    path
-}
+            let name = get("Name");
+            let version = get("Version");
+            let protocol = get("Protocol");
 
-fn token_cache_path() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("btpis_cli");
-    path.push("token_cache.json");
-    path
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn load_cached_token() -> Result<Option<CachedToken>> {
-    let path = token_cache_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&path).context("failed to read cached token")?;
-    let token: CachedToken = serde_json::from_str(&content).context("invalid cached token JSON")?;
-    Ok(Some(token))
-}
-
-fn save_cached_token(token: &CachedToken) -> Result<()> {
-    let path = token_cache_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).context("failed to create token cache directory")?;
-    }
-
-    fs::write(
-        &path,
-        serde_json::to_string_pretty(token).context("failed to serialize token cache")?,
-    )
-    .context("failed to write token cache")?;
-    Ok(())
-}
-
-fn format_timestamp(value: &str) -> String {
-    if let Ok(ms) = value.parse::<i64>() {
-        if let Some(dt) = DateTime::from_timestamp_millis(ms) {
-            return dt.with_timezone(&Utc).format("%m-%d-%Y").to_string();
-        }
-    }
-
-    if let Ok(seconds) = value.parse::<i64>() {
-        if let Some(dt) = DateTime::from_timestamp(seconds, 0) {
-            return dt
-                .with_timezone(&Utc)
-                .format("%Y-%m-%d %H:%M:%S UTC")
+            let url = entry
+                .descendants()
+                .find(|n| n.tag_name().name() == "Url")
+                .and_then(|n| n.text())
+                .unwrap_or("")
+                .trim()
                 .to_string();
-        }
+
+            Some(ServiceEndpointRow {
+                name,
+                version,
+                protocol,
+                url,
+            })
+        })
+        .collect();
+
+    if rows.is_empty() {
+        println!("No service endpoints found.");
+        return Ok(());
     }
 
-    if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
-        return dt
-            .with_timezone(&Utc)
-            .format("%Y-%m-%d %H:%M:%S UTC")
-            .to_string();
-    }
+    println!("[{}] {} service endpoint(s) found.", profile, rows.len());
+    let mut table = Table::new(&rows);
+    table.with(Style::rounded());
+    table.modify(Rows::first(), Color::FG_BRIGHT_GREEN);
+    println!("{table}");
 
-    value.to_string()
+    Ok(())
 }
