@@ -13,3 +13,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["clock"] }
 tabled = { version = "0.17", features = ["derive"] }
+roxmltree = "0.19"
+zip = "2"
+indexmap = "2"
