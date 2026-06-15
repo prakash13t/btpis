@@ -11,4 +11,4 @@ Cargo.lock
 **/*.rs.bk
 
 .rustc_info.json
-.adapters.rs
+adapters.rs
