@@ -18,7 +18,7 @@ use crate::utils::{
 struct ConfigurationRow {
     #[tabled(rename = "Parameter Name")]
     key: String,
-    #[tabled(rename = "Default Value")]
+    #[tabled(rename = "Parameter Value")]
     value: String,
     #[tabled(rename = "Data Type")]
     data_type: String,
