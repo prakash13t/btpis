@@ -12,3 +12,5 @@ Cargo.lock
 
 .rustc_info.json
 src/adapters.rs
+
+/node_modules/

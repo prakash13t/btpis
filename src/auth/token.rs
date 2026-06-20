@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
-
 use crate::config::OauthConfig;
 
 #[derive(Debug, Deserialize)]

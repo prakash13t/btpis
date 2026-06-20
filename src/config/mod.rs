@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -53,20 +52,6 @@ pub struct OauthConfig {
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct OldConfig {
-    oauth: OauthConfig,
-}
-
-fn try_migrate_old_format(content: &str) -> Option<ConfigFile> {
-    let old: OldConfig = serde_json::from_str(content).ok()?;
-    eprintln!("info: migrating config to new format with profiles");
-    Some(ConfigFile {
-        default_profile: "default".to_string(),
-        profiles: [("default".to_string(), old.oauth)].into_iter().collect(),
-    })
-}
-
 pub fn load_config() -> Result<ConfigFile> {
     let path = config_path();
     let content = fs::read_to_string(&path).with_context(|| {
@@ -80,16 +65,6 @@ pub fn load_config() -> Result<ConfigFile> {
         if !config.profiles.is_empty() {
             return Ok(config);
         }
-    }
-
-    if let Some(config) = try_migrate_old_format(&content) {
-        let json =
-            serde_json::to_string_pretty(&config).context("failed to serialize migrated config")?;
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(&path, &json);
-        return Ok(config);
     }
 
     anyhow::bail!(

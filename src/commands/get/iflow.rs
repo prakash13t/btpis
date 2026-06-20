@@ -5,14 +5,12 @@ use tabled::{
     Table, Tabled,
     settings::{Color, Style, object::Rows},
 };
-
 use crate::auth::get_token;
 use crate::config::ConfigFile;
 use crate::utils::{
     AdapterDirection, DetailRow, fetch_iflow_adapters, format_timestamp, summarise_adapters,
 };
 
-// ── Display structs ───────────────────────────────────────────────────────────
 
 #[derive(Tabled)]
 struct ConfigurationRow {
@@ -32,7 +30,6 @@ struct ResourceRow {
     resource_type: String,
 }
 
-// ── Fetch helpers ─────────────────────────────────────────────────────────────
 
 async fn fetch_configurations(
     client: &reqwest::Client,
@@ -141,8 +138,6 @@ async fn fetch_resources(
     Ok(rows)
 }
 
-// ── Section header helper ─────────────────────────────────────────────────────
-
 fn print_section(label: &str, count: usize, pad: usize) {
     println!(
         "\n{}",
@@ -151,8 +146,6 @@ fn print_section(label: &str, count: usize, pad: usize) {
             .bold()
     );
 }
-
-// ── Public entry point ────────────────────────────────────────────────────────
 
 pub async fn handle(
     config: &ConfigFile,
@@ -192,13 +185,12 @@ pub async fn handle(
         .text()
         .await
         .context("failed to read response body")?;
-    let doc = roxmltree::Document::parse(&text).context("failed to parse XML response")?;
 
+    let doc = roxmltree::Document::parse(&text).context("failed to parse XML response")?;
     let props = doc
         .descendants()
         .find(|n| n.tag_name().name() == "properties")
         .context("missing <m:properties> in response")?;
-
     let get = |name: &str| -> String {
         props
             .children()
@@ -216,7 +208,7 @@ pub async fn handle(
     let receiver = get("Receiver");
     let comment = get("Comment");
 
-    // Fire all optional requests concurrently alongside adapter fetch
+    // Fire all optional requests concurrently
     let (adapter_result, configs_result, resources_result) = tokio::join!(
         fetch_iflow_adapters(&client, base_url, &token, &iflow_id, &iflow_version),
         async {

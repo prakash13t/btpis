@@ -2,7 +2,6 @@ mod iflow;
 
 use anyhow::Result;
 use clap::Subcommand;
-
 use crate::config::ConfigFile;
 
 #[derive(Debug, Subcommand)]
@@ -16,7 +15,7 @@ pub enum GetCommands {
         /// Also display the iflow's externalised configuration parameters
         #[arg(long, default_value_t = false)]
         configurations: bool,
-        /// Also display the iflow's bundled resources (scripts, schemas, mappings)
+        /// Also display the iflow's resources (scripts, schemas, mappings)
         #[arg(long, default_value_t = false)]
         resources: bool,
     },

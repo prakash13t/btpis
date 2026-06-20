@@ -21,8 +21,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tabled::settings::object::{Columns, Rows};
 use tabled::settings::{Color, Style, Width};
 use tabled::{Table, Tabled};
-
 use crate::utils::{format_duration, parse_duration_relative, parse_json_date, summarise_adapters};
+use crate::utils::{start_spinner,csv_escape};
 
 #[derive(Debug, Parser)]
 #[command(name = "btpis")]
@@ -184,19 +184,14 @@ struct PackageRow {
 struct IflowDisplayRow {
     #[tabled(rename = "Name")]
     name: String,
-
     #[tabled(rename = "Version")]
     version: String,
-
     #[tabled(rename = "Sender")]
     sender: String,
-
     #[tabled(rename = "Receiver")]
     receiver: String,
-
     #[tabled(rename = "Sender Adapter")]
     sender_adapter: String,
-
     #[tabled(rename = "Receiver Adapter")]
     receiver_adapter: String,
 }
@@ -236,6 +231,7 @@ async fn main() -> Result<()> {
         Commands::List { target } => {
             let config = load_config()?;
             let profile = resolve_profile(cli.profile.as_deref(), &config);
+            
             match target {
                 ListCommands::Packages => list_packages(&config, &profile).await?,
                 ListCommands::Iflows { package_id, all } => {
@@ -264,7 +260,7 @@ async fn main() -> Result<()> {
         } => {
             let config = load_config()?;
             let profile = resolve_profile(cli.profile.as_deref(), &config);
-            handle_logs(&config, &profile, iflow_id, tail, since, since_time, follow, api_key)
+            list_logs(&config, &profile, iflow_id, tail, since, since_time, follow, api_key)
                 .await?;
         }
     }
@@ -369,6 +365,7 @@ fn set_default_profile(profile: &str) -> Result<()> {
 async fn list_packages(config: &config::ConfigFile, profile: &str) -> Result<()> {
     let token = get_token(config, profile).await?;
     let client = reqwest::Client::new();
+    let spinner = start_spinner("Fetching packages...");
 
     let oauth = config.get_profile(profile)?;
     let base_url = oauth.url.trim_end_matches('/');
@@ -381,7 +378,7 @@ async fn list_packages(config: &config::ConfigFile, profile: &str) -> Result<()>
         .send()
         .await
         .context("failed to fetch packages")?;
-
+    spinner.finish_and_clear();
     if !response.status().is_success() {
         anyhow::bail!("package request failed with status: {}", response.status());
     }
@@ -422,6 +419,7 @@ async fn list_integration_flows(
 
     let oauth = config.get_profile(profile)?;
     let base_url = oauth.url.trim_end_matches('/');
+    let spinner = start_spinner("Fetching integration flows...");
 
     let url = format!("{}/api/v1/IntegrationPackages?$format=json", base_url);
     let response = client
@@ -462,6 +460,7 @@ async fn list_integration_flows(
     let mut display_rows: Vec<IflowDisplayRow> = Vec::new();
 
     for pkg_id in &package_ids {
+        spinner.set_message(format!("Fetching iflows for package: {}", pkg_id));
         let url = format!(
             "{}/api/v1/IntegrationPackages('{}')/IntegrationDesigntimeArtifacts?$format=json",
             base_url, pkg_id
@@ -554,7 +553,7 @@ async fn list_integration_flows(
             });
         }
     }
-
+    spinner.finish_and_clear();
     if display_rows.is_empty() {
         println!("No integration flows found.");
         return Ok(());
@@ -573,7 +572,7 @@ async fn list_integration_flows(
 async fn list_serviceendpoints(config: &config::ConfigFile, profile: &str) -> Result<()> {
     let token = get_token(config, profile).await?;
     let client = reqwest::Client::new();
-
+    let spinner = start_spinner("Fetching service endpoints...");
     let oauth = config.get_profile(profile)?;
     let base_url = oauth.url.trim_end_matches('/');
     let url = format!(
@@ -646,7 +645,7 @@ async fn list_serviceendpoints(config: &config::ConfigFile, profile: &str) -> Re
             })
         })
         .collect();
-
+    spinner.finish_and_clear();
     if rows.is_empty() {
         println!("No service endpoints found.");
         return Ok(());
@@ -660,8 +659,6 @@ async fn list_serviceendpoints(config: &config::ConfigFile, profile: &str) -> Re
 
     Ok(())
 }
-
-// ── Configurations ─────────────────────────────────────────────────────────
 
 async fn fetch_iflow_configs(
     client: &reqwest::Client,
@@ -725,14 +722,6 @@ async fn fetch_iflow_configs(
         .collect();
 
     Ok(rows)
-}
-
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
 }
 
 async fn list_configurations(
@@ -887,8 +876,6 @@ async fn list_configurations(
     Ok(())
 }
 
-// ── Logs ───────────────────────────────────────────────────────────────────
-
 fn format_log_line(
     message_guid: &str,
     integration_flow_name: Option<&str>,
@@ -1002,7 +989,7 @@ async fn fetch_logs_xml(
     Ok(results)
 }
 
-async fn handle_logs(
+async fn list_logs(
     config: &config::ConfigFile,
     profile: &str,
     iflow_id: Option<String>,

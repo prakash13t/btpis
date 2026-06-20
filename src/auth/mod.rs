@@ -3,9 +3,7 @@ mod token;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::Result;
-
 use crate::config::ConfigFile;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

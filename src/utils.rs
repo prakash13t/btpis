@@ -3,6 +3,8 @@ pub use crate::adapters::{AdapterDirection, fetch_iflow_adapters};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use indexmap::IndexMap;
 use tabled::Tabled;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::time::Duration;
 
 #[derive(Tabled)]
 pub struct DetailRow {
@@ -108,5 +110,25 @@ pub fn parse_duration_relative(s: &str) -> Option<std::time::Duration> {
         "h" => Some(std::time::Duration::from_secs(num * 3600)),
         "d" => Some(std::time::Duration::from_secs(num * 86400)),
         _ => None,
+    }
+}
+
+pub fn start_spinner(msg: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb
+}
+
+pub fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
     }
 }
