@@ -4,13 +4,15 @@ mod commands;
 mod config;
 mod utils;
 
+use crate::utils::{csv_escape, start_spinner};
+use crate::utils::{format_duration, parse_duration_relative, parse_json_date, summarise_adapters};
 use adapters::{AdapterDirection, fetch_iflow_adapters};
 use anyhow::{Context, Result};
 use auth::get_token;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use commands::get::GetCommands;
-use config::{config_path, load_config, resolve_profile, OauthConfig};
+use commands::{deploy::DeployCommands, get::GetCommands};
+use config::{OauthConfig, config_path, load_config, resolve_profile};
 use owo_colors::OwoColorize;
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use serde::Deserialize;
@@ -21,8 +23,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tabled::settings::object::{Columns, Rows};
 use tabled::settings::{Color, Style, Width};
 use tabled::{Table, Tabled};
-use crate::utils::{format_duration, parse_duration_relative, parse_json_date, summarise_adapters};
-use crate::utils::{start_spinner,csv_escape};
 
 #[derive(Debug, Parser)]
 #[command(name = "btpis")]
@@ -52,6 +52,13 @@ enum Commands {
     Get {
         #[command(subcommand)]
         target: GetCommands,
+    },
+    /// Deploy an integration flow or a CSV batch of integration flows
+    Deploy {
+        #[command(subcommand)]
+        target: Option<DeployCommands>,
+        /// Path to a CSV file with integration flow deploy entries
+        file: Option<PathBuf>,
     },
     /// Show message processing logs for integration flows
     Logs {
@@ -231,15 +238,13 @@ async fn main() -> Result<()> {
         Commands::List { target } => {
             let config = load_config()?;
             let profile = resolve_profile(cli.profile.as_deref(), &config);
-            
+
             match target {
                 ListCommands::Packages => list_packages(&config, &profile).await?,
                 ListCommands::Iflows { package_id, all } => {
                     list_integration_flows(&config, &profile, package_id, all).await?
                 }
-                ListCommands::Serviceendpoints => {
-                    list_serviceendpoints(&config, &profile).await?
-                }
+                ListCommands::Serviceendpoints => list_serviceendpoints(&config, &profile).await?,
                 ListCommands::Configurations { filter, csv } => {
                     list_configurations(&config, &profile, filter, csv).await?
                 }
@@ -249,6 +254,24 @@ async fn main() -> Result<()> {
             let config = load_config()?;
             let profile = resolve_profile(cli.profile.as_deref(), &config);
             commands::get::handle(target, &config, &profile).await?;
+        }
+        Commands::Deploy { target, file } => {
+            let config = load_config()?;
+            let profile = resolve_profile(cli.profile.as_deref(), &config);
+
+            match target {
+                Some(target) => commands::deploy::handle(target, &config, &profile).await?,
+                None => {
+                    if let Some(file) = file {
+                        commands::deploy::handle(DeployCommands::Bulk { file }, &config, &profile)
+                            .await?;
+                    } else {
+                        anyhow::bail!(
+                            "provide either 'iflow <id> <version>', 'bulk <file.csv>', or a CSV file path directly"
+                        );
+                    }
+                }
+            }
         }
         Commands::Logs {
             iflow_id,
@@ -260,8 +283,10 @@ async fn main() -> Result<()> {
         } => {
             let config = load_config()?;
             let profile = resolve_profile(cli.profile.as_deref(), &config);
-            list_logs(&config, &profile, iflow_id, tail, since, since_time, follow, api_key)
-                .await?;
+            list_logs(
+                &config, &profile, iflow_id, tail, since, since_time, follow, api_key,
+            )
+            .await?;
         }
     }
 
@@ -338,10 +363,9 @@ fn list_profiles() -> Result<()> {
 
 fn set_default_profile(profile: &str) -> Result<()> {
     let path = config_path();
-    let mut config: config::ConfigFile = serde_json::from_str(
-        &fs::read_to_string(&path).context("config file not found")?,
-    )
-    .context("invalid config JSON")?;
+    let mut config: config::ConfigFile =
+        serde_json::from_str(&fs::read_to_string(&path).context("config file not found")?)
+            .context("invalid config JSON")?;
 
     if !config.profiles.contains_key(profile) {
         anyhow::bail!(
@@ -559,7 +583,11 @@ async fn list_integration_flows(
         return Ok(());
     }
 
-    println!("[{}] {} integration flow(s) found.", profile, display_rows.len());
+    println!(
+        "[{}] {} integration flow(s) found.",
+        profile,
+        display_rows.len()
+    );
 
     let mut table = Table::new(&display_rows);
     table.with(Style::rounded());
@@ -575,10 +603,7 @@ async fn list_serviceendpoints(config: &config::ConfigFile, profile: &str) -> Re
     let spinner = start_spinner("Fetching service endpoints...");
     let oauth = config.get_profile(profile)?;
     let base_url = oauth.url.trim_end_matches('/');
-    let url = format!(
-        "{}/api/v1/ServiceEndpoints?$expand=EntryPoints",
-        base_url
-    );
+    let url = format!("{}/api/v1/ServiceEndpoints?$expand=EntryPoints", base_url);
 
     let response = client
         .get(&url)
@@ -609,11 +634,7 @@ async fn list_serviceendpoints(config: &config::ConfigFile, profile: &str) -> Re
             let props = entry
                 .descendants()
                 .filter(|n| n.tag_name().name() == "properties")
-                .find(|props| {
-                    props
-                        .children()
-                        .any(|c| c.tag_name().name() == "Version")
-                })?;
+                .find(|props| props.children().any(|c| c.tag_name().name() == "Version"))?;
 
             let get = |name: &str| -> String {
                 props
@@ -756,9 +777,9 @@ async fn list_configurations(
 
     let all_packages: Vec<String> = body.d.results.into_iter().map(|p| p.id).collect();
 
-    let target_package = filter.as_ref().and_then(|f| {
-        all_packages.iter().find(|id| id.eq_ignore_ascii_case(f))
-    });
+    let target_package = filter
+        .as_ref()
+        .and_then(|f| all_packages.iter().find(|id| id.eq_ignore_ascii_case(f)));
 
     let package_ids: Vec<&str> = if let Some(pkg) = target_package {
         vec![pkg.as_str()]
@@ -886,8 +907,11 @@ fn format_log_line(
     let start_ts = log_start
         .and_then(parse_json_date)
         .and_then(|ms| {
-            DateTime::from_timestamp_millis(ms)
-                .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%d %H:%M:%S").to_string())
+            DateTime::from_timestamp_millis(ms).map(|dt| {
+                dt.with_timezone(&Utc)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
         })
         .unwrap_or_else(|| log_start.unwrap_or("—").to_string());
 
@@ -939,7 +963,15 @@ async fn fetch_logs_xml(
     url: &str,
     auth_header: &str,
     auth_value: &str,
-) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+) -> Result<
+    Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )>,
+> {
     let response = client
         .get(url)
         .header(auth_header, auth_value)
@@ -954,10 +986,7 @@ async fn fetch_logs_xml(
         anyhow::bail!("logs request failed with status {}: {}", status, body);
     }
 
-    let text = response
-        .text()
-        .await
-        .context("failed to read logs body")?;
+    let text = response.text().await.context("failed to read logs body")?;
 
     let doc = roxmltree::Document::parse(&text).context("failed to parse logs XML")?;
 
@@ -965,7 +994,9 @@ async fn fetch_logs_xml(
         .descendants()
         .filter(|n| n.tag_name().name() == "entry")
         .filter_map(|entry| {
-            let props = entry.descendants().find(|n| n.tag_name().name() == "properties")?;
+            let props = entry
+                .descendants()
+                .find(|n| n.tag_name().name() == "properties")?;
 
             let get = |name: &str| -> Option<String> {
                 props
@@ -1063,7 +1094,16 @@ async fn list_logs(
         }
     } else {
         for (guid, flow, status, log_start, log_end) in records.iter().rev() {
-            println!("{}", format_log_line(guid, flow.as_deref(), status.as_deref(), log_start.as_deref(), log_end.as_deref()));
+            println!(
+                "{}",
+                format_log_line(
+                    guid,
+                    flow.as_deref(),
+                    status.as_deref(),
+                    log_start.as_deref(),
+                    log_end.as_deref()
+                )
+            );
         }
     }
 
@@ -1074,7 +1114,10 @@ async fn list_logs(
             .max()
             .unwrap_or(0);
 
-        let mut seen: HashSet<String> = records.iter().map(|(guid, _, _, _, _)| guid.clone()).collect();
+        let mut seen: HashSet<String> = records
+            .iter()
+            .map(|(guid, _, _, _, _)| guid.clone())
+            .collect();
 
         eprintln!(
             "--- Following logs{} (polling every 60s, Ctrl+C to stop) ---",
@@ -1091,7 +1134,11 @@ async fn list_logs(
             let mut follow_filters = filter_parts.clone();
             if last_seen > 0 {
                 let dt = DateTime::from_timestamp_millis(last_seen)
-                    .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%S").to_string())
+                    .map(|dt| {
+                        dt.with_timezone(&Utc)
+                            .format("%Y-%m-%dT%H:%M:%S")
+                            .to_string()
+                    })
                     .unwrap_or_default();
                 follow_filters.push(format!("LogStart ge datetime'{}'", dt));
             }
@@ -1109,7 +1156,16 @@ async fn list_logs(
                     for (guid, flow, status, log_start, log_end) in &new_records {
                         if seen.insert(guid.clone()) {
                             count += 1;
-                            println!("{}", format_log_line(guid, flow.as_deref(), status.as_deref(), log_start.as_deref(), log_end.as_deref()));
+                            println!(
+                                "{}",
+                                format_log_line(
+                                    guid,
+                                    flow.as_deref(),
+                                    status.as_deref(),
+                                    log_start.as_deref(),
+                                    log_end.as_deref()
+                                )
+                            );
                             if let Some(ts) = log_start.as_deref().and_then(parse_json_date) {
                                 if ts > new_last {
                                     new_last = ts;

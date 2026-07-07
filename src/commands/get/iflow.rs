@@ -1,3 +1,8 @@
+use crate::auth::get_token;
+use crate::config::ConfigFile;
+use crate::utils::{
+    AdapterDirection, DetailRow, fetch_iflow_adapters, format_timestamp, summarise_adapters,
+};
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use reqwest::header::{ACCEPT, AUTHORIZATION};
@@ -5,12 +10,6 @@ use tabled::{
     Table, Tabled,
     settings::{Color, Style, object::Rows},
 };
-use crate::auth::get_token;
-use crate::config::ConfigFile;
-use crate::utils::{
-    AdapterDirection, DetailRow, fetch_iflow_adapters, format_timestamp, summarise_adapters,
-};
-
 
 #[derive(Tabled)]
 struct ConfigurationRow {
@@ -29,7 +28,6 @@ struct ResourceRow {
     #[tabled(rename = "Type")]
     resource_type: String,
 }
-
 
 async fn fetch_configurations(
     client: &reqwest::Client,

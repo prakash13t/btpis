@@ -2,9 +2,9 @@ pub use crate::adapters::{AdapterDirection, fetch_iflow_adapters};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use indexmap::IndexMap;
-use tabled::Tabled;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
+use tabled::Tabled;
 
 #[derive(Tabled)]
 pub struct DetailRow {

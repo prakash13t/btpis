@@ -1,8 +1,8 @@
 mod iflow;
 
+use crate::config::ConfigFile;
 use anyhow::Result;
 use clap::Subcommand;
-use crate::config::ConfigFile;
 
 #[derive(Debug, Subcommand)]
 pub enum GetCommands {
