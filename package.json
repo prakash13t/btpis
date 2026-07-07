@@ -1,7 +1,7 @@
 {
   "name": "btpis",
-  "version": "1.0.3",
-  "description": "demo rust npm package",
+  "version": "0.1.0",
+  "description": "A simple CLI tool for SAP BTP Integration Suite",
   "author": "prakash13t",
   "type": "module",
   "files": [
@@ -9,7 +9,7 @@
     "scripts"
   ],
   "bin": {
-    "btpdemo-cli": "bin/btpis-cli.js"
+    "btpis": "bin/btpis.js"
   },
   "scripts": {
     "version:sync": "node scripts/sync-version.js",
@@ -19,10 +19,9 @@
     "build:macos": "npm run version:sync && (cargo build --release --manifest-path cli/Cargo.toml --target aarch64-apple-darwin & cargo build --release --manifest-path cli/Cargo.toml --target x86_64-apple-darwin & wait) && cp cli/target/aarch64-apple-darwin/release/demo-cli bin/demo-cli-darwin-arm64 && cp cli/target/x86_64-apple-darwin/release/demo-cli bin/demo-cli-darwin-x64",
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait) && npm run build:macos",
-    "build:docker": "docker build --platform linux/amd64 -t agent-browser-builder -f docker/Dockerfile.build .",
+    "build:docker": "docker build --platform linux/amd64 -t btpis-builder -f docker/Dockerfile.build .",
     "release": "npm run version:sync && npm run build:windows && npm publish",
-    "postinstall": "node scripts/postinstall.js",
-    "build:dashboard": "cd packages/dashboard && pnpm build"
+    "postinstall": "node scripts/postinstall.js"
   },
   "license": "Apache-2.0",
   "repository": {
