@@ -1,0 +1,40 @@
+[project]
+name = "btpis"
+requires-python = ">=3.10"
+description = "A command-line tool for SAP BTP Inegration Suite"
+readme = {file = "README.md", content-type = "text/markdown"}
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+dynamic = ["version"]
+classifiers=[
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
+keywords = ["cpi", "is", "btpis"]
+
+[project.urls]
+issues = "https://github.com/prakash13t/btpis/issues"
+source = "https://github.com/prakash13t/btpis"
+
+[[project.authors]]
+name = "Naga Prakash"
+email = "prakash13t@yahoo.com"
+
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "../cli/Cargo.toml"
+module-name = "btpis"
+locked = true
+
+[dependency-groups]
+dev = [
+    "maturin>=1.9,<2 ; python_full_version >= '3.12'",
+]
