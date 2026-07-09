@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use auth::get_token;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use commands::{deploy::DeployCommands, get::GetCommands};
+use commands::{deploy::DeployCommands, get::GetCommands, undeploy::UnDeployCommands};
 use config::{OauthConfig, config_path, load_config, resolve_profile};
 use owo_colors::OwoColorize;
 use reqwest::header::{ACCEPT, AUTHORIZATION};
@@ -58,6 +58,12 @@ enum Commands {
         #[command(subcommand)]
         target: Option<DeployCommands>,
         /// Path to a CSV file with integration flow deploy entries
+        file: Option<PathBuf>,
+    },
+    Undeploy {
+        #[command(subcommand)]
+        target: Option<UnDeployCommands>,
+        /// Path to a CSV file with integration flow undeploy entries
         file: Option<PathBuf>,
     },
     /// Show message processing logs for integration flows
@@ -270,6 +276,49 @@ async fn main() -> Result<()> {
                             "provide either 'iflow <id> <version>', 'bulk <file.csv>', or a CSV file path directly"
                         );
                     }
+                }
+            }
+        }
+        Commands::Undeploy { target, file } => {
+            let config = load_config()?;
+            let profile = resolve_profile(cli.profile.as_deref(), &config);
+
+            fn looks_like_path(path: &std::path::Path) -> bool {
+                path.is_absolute()
+                    || path.components().count() > 1
+                    || path.extension().is_some()
+                    || path.to_string_lossy().contains(std::path::MAIN_SEPARATOR)
+            }
+
+            match (target, file) {
+                (Some(target), None) => {
+                    commands::undeploy::handle(target, &config, &profile).await?;
+                }
+                (None, Some(file)) => {
+                    if file.exists() {
+                        commands::undeploy::handle(
+                            commands::undeploy::UnDeployCommands::Bulk { file },
+                            &config,
+                            &profile,
+                        )
+                        .await?;
+                    } else if looks_like_path(&file) {
+                        anyhow::bail!("failed to read CSV file: {}", file.display());
+                    } else {
+                        let id = file.to_string_lossy().to_string();
+                        commands::undeploy::handle(
+                            commands::undeploy::UnDeployCommands::Iflow { id },
+                            &config,
+                            &profile,
+                        )
+                        .await?;
+                    }
+                }
+                (Some(_), Some(_)) => {
+                    anyhow::bail!("provide either 'iflow <id>' or a file name, not both");
+                }
+                (None, None) => {
+                    anyhow::bail!("provide either 'iflow <id>' or a file name");
                 }
             }
         }
