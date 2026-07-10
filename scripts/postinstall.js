@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Postinstall script for agent-browser
+ * Postinstall script for btpis
  * 
  * Downloads the platform-specific native binary if not present.
  * On global installs, patches npm's bin entry to use the native binary directly:
@@ -38,7 +38,7 @@ const osKey = platform() === 'linux' && isMusl() ? 'linux-musl' : platform();
 const effectiveArch = platform() === 'win32' && arch() === 'arm64' ? 'x64' : arch();
 const platformKey = `${osKey}-${effectiveArch}`;
 const ext = platform() === 'win32' ? '.exe' : '';
-const binaryName = `agent-browser-${platformKey}${ext}`;
+const binaryName = `btpis-${platformKey}${ext}`;
 const binaryPath = join(binDir, binaryName);
 
 // Package info
@@ -48,7 +48,7 @@ const packageJson = JSON.parse(
 const version = packageJson.version;
 
 // GitHub release URL
-const GITHUB_REPO = 'vercel-labs/agent-browser';
+const GITHUB_REPO = 'prakash13t/btpis';
 const DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${binaryName}`;
 
 async function downloadFile(url, dest) {
@@ -85,7 +85,7 @@ async function downloadFile(url, dest) {
 
 /**
  * Detect which package manager ran this postinstall and write a marker file
- * next to the binary so `agent-browser upgrade` can use the correct one
+ * next to the binary so `btpis upgrade` can use the correct one
  * without fragile path heuristics or slow subprocess probing.
  *
  * npm_config_user_agent is set by npm/pnpm/yarn/bun during lifecycle scripts,
@@ -122,7 +122,6 @@ async function main() {
     // On global installs, fix npm's bin entry to use native binary directly
     await fixGlobalInstallBin();
 
-    showInstallReminder();
     return;
   }
 
@@ -160,64 +159,6 @@ async function main() {
   // This avoids the /bin/sh error on Windows and provides zero-overhead execution
   await fixGlobalInstallBin();
 
-  showInstallReminder();
-}
-
-function findSystemChrome() {
-  const os = platform();
-  if (os === 'darwin') {
-    const candidates = [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    ];
-    return candidates.find(p => existsSync(p)) || null;
-  }
-  if (os === 'linux') {
-    const names = ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium'];
-    for (const name of names) {
-      try {
-        const result = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8' }).trim();
-        if (result) return result;
-      } catch {}
-    }
-    return null;
-  }
-  if (os === 'win32') {
-    const candidates = [
-      `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    ];
-    return candidates.find(p => p && existsSync(p)) || null;
-  }
-  return null;
-}
-
-function showInstallReminder() {
-  const systemChrome = findSystemChrome();
-  if (systemChrome) {
-    console.log('');
-    console.log(`  ✓ System Chrome found: ${systemChrome}`);
-    console.log('    agent-browser will use it automatically.');
-    console.log('');
-    return;
-  }
-
-  console.log('');
-  console.log('  ⚠ No Chrome installation detected.');
-  console.log('  If you plan to use a local browser, run:');
-  console.log('');
-  console.log('    agent-browser install');
-  if (platform() === 'linux') {
-    console.log('');
-    console.log('  On Linux, include system dependencies with:');
-    console.log('');
-    console.log('    agent-browser install --with-deps');
-  }
-  console.log('');
-  console.log('  You can skip this if you use --cdp, --provider, --engine, or --executable-path.');
-  console.log('');
 }
 
 /**
@@ -246,7 +187,7 @@ async function fixUnixSymlink() {
     return; // npm not available
   }
 
-  const symlinkPath = join(npmBinDir, 'agent-browser');
+  const symlinkPath = join(npmBinDir, 'btpis');
 
   // Check if symlink exists (indicates global install)
   try {
@@ -283,12 +224,12 @@ async function fixWindowsShims() {
     return;
   }
 
-  const cmdShim = join(npmBinDir, 'agent-browser.cmd');
-  const ps1Shim = join(npmBinDir, 'agent-browser.ps1');
+  const cmdShim = join(npmBinDir, 'btpis.cmd');
+  const ps1Shim = join(npmBinDir, 'btpis.ps1');
 
   // Shims may not exist yet during postinstall (npm creates them after
   // lifecycle scripts). If missing, fall back: the JS wrapper at
-  // bin/agent-browser.js handles Windows correctly via child_process.spawn.
+  // bin/btpis.js handles Windows correctly via child_process.spawn.
   if (!existsSync(cmdShim)) {
     return;
   }
@@ -296,7 +237,7 @@ async function fixWindowsShims() {
   // Detect architecture so ARM64 Windows is handled correctly
   // (falls back to x64 binary — see platform detection above)
   const cpuArch = effectiveArch;
-  const relativeBinaryPath = `node_modules\\agent-browser\\bin\\agent-browser-win32-${cpuArch}.exe`;
+  const relativeBinaryPath = `node_modules\\btpis\\bin\\btpis-win32-${cpuArch}.exe`;
   const absoluteBinaryPath = join(npmBinDir, relativeBinaryPath);
 
   // Only rewrite shims if the native binary actually exists

@@ -30,7 +30,8 @@ npm install -g btpis@latest
 
 ## Configuration
 
-The CLI stores OAuth configuration in a JSON file under your user config directory. You can create a profile from a JSON file containing the required properties.
+The CLI stores OAuth configuration in a JSON file under your user config directory. You can create a profile from a JSON file containing the required properties. Download the API service key from the tenant:
+![alt text](image.png)
 
 Example profile file:
 

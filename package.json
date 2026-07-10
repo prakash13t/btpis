@@ -1,6 +1,6 @@
 {
   "name": "btpis",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "A simple CLI tool for SAP BTP Integration Suite",
   "author": "prakash13t",
   "type": "module",
